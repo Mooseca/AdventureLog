@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -12,6 +12,7 @@ from adventures.models import (
     Note,
 )
 from adventures.services.collection_pdf import (
+    _format_datetime,
     _iter_text_chunks,
     build_collection_pdf,
     pdf_filename_for_collection,
@@ -173,3 +174,22 @@ class CollectionPdfTests(TestCase):
         chunks = _iter_text_chunks(paragraphs)
         self.assertEqual(len(chunks), 5)
         self.assertEqual(chunks[2], 'Section 2 body')
+
+    def test_format_datetime_converts_to_item_timezone(self):
+        # Stored values are UTC; the PDF should show the destination's local time.
+        utc_dt = datetime(2026, 3, 10, 23, 30, tzinfo=dt_timezone.utc)
+        self.assertEqual(
+            _format_datetime(utc_dt, 'Asia/Tokyo'),
+            'Mar 11, 2026 08:30 AM (Asia/Tokyo)',
+        )
+        self.assertEqual(
+            _format_datetime(datetime(2026, 3, 10, 14, 5, tzinfo=dt_timezone.utc), 'America/New_York'),
+            'Mar 10, 2026 10:05 AM (America/New_York)',
+        )
+
+    def test_format_datetime_leaves_all_day_and_unknown_timezones_alone(self):
+        midnight = datetime(2026, 3, 10, 0, 0, tzinfo=dt_timezone.utc)
+        self.assertEqual(_format_datetime(midnight, 'America/New_York'), 'Mar 10, 2026')
+        timed = datetime(2026, 3, 10, 14, 5, tzinfo=dt_timezone.utc)
+        self.assertEqual(_format_datetime(timed, 'Not/AZone'), 'Mar 10, 2026 02:05 PM (Not/AZone)')
+        self.assertEqual(_format_datetime(timed), 'Mar 10, 2026 02:05 PM')

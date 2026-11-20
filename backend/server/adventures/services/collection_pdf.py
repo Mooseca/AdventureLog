@@ -7,6 +7,7 @@ import io
 import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.db.models import Prefetch
 from PIL import Image as PILImage
@@ -156,13 +157,32 @@ def _format_short_date(d: Optional[date]) -> str:
     return d.strftime('%b %d, %Y')
 
 
+def _is_all_day(dt: datetime) -> bool:
+    """All-day entries are stored as midnight UTC (mirrors the frontend's logic)."""
+    return dt.hour == 0 and dt.minute == 0 and dt.second == 0
+
+
+def _to_local(dt: datetime, tz_name: Optional[str]) -> datetime:
+    """Convert a stored (UTC) datetime into the item's own timezone, if known."""
+    if not tz_name or _is_all_day(dt):
+        return dt
+    try:
+        zone = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo('UTC'))
+    return dt.astimezone(zone)
+
+
 def _format_datetime(dt: Optional[datetime], tz_name: Optional[str] = None) -> str:
     if not dt:
         return ''
-    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+    if _is_all_day(dt):
         return dt.strftime('%b %d, %Y')
+    local = _to_local(dt, tz_name)
     suffix = f' ({tz_name})' if tz_name else ''
-    return dt.strftime('%b %d, %Y %I:%M %p').lstrip('0') + suffix
+    return local.strftime('%b %d, %Y %I:%M %p').lstrip('0') + suffix
 
 
 def _format_money(amount, currency: Optional[str]) -> str:
@@ -207,8 +227,8 @@ def _overnight_lodging_for_date(collection: Collection, day: date, scheduled_lod
             continue
         if not lodging.check_in or not lodging.check_out:
             continue
-        check_in = lodging.check_in.date()
-        check_out = lodging.check_out.date()
+        check_in = _to_local(lodging.check_in, lodging.timezone).date()
+        check_out = _to_local(lodging.check_out, lodging.timezone).date()
         if check_in <= target < check_out:
             result.append(lodging)
     return result
@@ -316,8 +336,8 @@ def _location_paragraphs(location: Location, styles) -> List:
         flowables.append(Paragraph(pdf_markup(', '.join(geo_bits)), styles['ItemMeta']))
 
     for visit in location.visits.all().order_by('start_date'):
-        start = visit.start_date.date() if visit.start_date else None
-        end = visit.end_date.date() if visit.end_date else None
+        start = _to_local(visit.start_date, visit.timezone).date() if visit.start_date else None
+        end = _to_local(visit.end_date, visit.timezone).date() if visit.end_date else None
         if start and end and end != start:
             flowables.append(
                 Paragraph(
